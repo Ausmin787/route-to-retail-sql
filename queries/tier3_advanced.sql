@@ -110,39 +110,70 @@ WHERE declined_from_previous_month = 1
 ORDER BY distributor_name, sales_month;
 
 
--- Q16. Cohort analysis:
--- For each retailer first-purchase month, how many are still purchasing 3 months later?
+-- Q16. Retailer cohort retention matrix (normalized by cohort size)
+-- Rows: cohort_month × month_offset
+-- Each row shows what % of the original cohort was still active at that offset.
+-- avg_retention_across_cohorts averages all cohorts at the same offset — removes January size skew.
 
 WITH first_purchase AS (
     SELECT
         retailer_id,
-        DATE_TRUNC('month', MIN(order_date))::date AS first_purchase_month
+        DATE_TRUNC('month', MIN(order_date))::date AS cohort_month
     FROM sales_orders
     GROUP BY retailer_id
 ),
-month_3_purchases AS (
+cohort_sizes AS (
+    SELECT
+        cohort_month,
+        COUNT(retailer_id) AS cohort_size
+    FROM first_purchase
+    GROUP BY cohort_month
+),
+activity AS (
     SELECT DISTINCT
         fp.retailer_id,
-        fp.first_purchase_month
+        fp.cohort_month,
+        DATE_TRUNC('month', so.order_date)::date AS activity_month
     FROM first_purchase fp
-    JOIN sales_orders so
-        ON fp.retailer_id = so.retailer_id
-       AND DATE_TRUNC('month', so.order_date)::date =
-           fp.first_purchase_month + INTERVAL '3 months'
+    JOIN sales_orders so ON fp.retailer_id = so.retailer_id
+    WHERE DATE_TRUNC('month', so.order_date)::date > fp.cohort_month
+),
+cohort_retention AS (
+    SELECT
+        cohort_month,
+        (EXTRACT(YEAR  FROM AGE(activity_month, cohort_month)) * 12
+         + EXTRACT(MONTH FROM AGE(activity_month, cohort_month)))::int AS month_offset,
+        COUNT(DISTINCT retailer_id) AS retained_count
+    FROM activity
+    GROUP BY cohort_month, month_offset
+),
+retention_pct AS (
+    SELECT
+        cr.cohort_month,
+        cr.month_offset,
+        cs.cohort_size,
+        cr.retained_count,
+        ROUND(cr.retained_count * 100.0 / cs.cohort_size, 2) AS retention_pct
+    FROM cohort_retention cr
+    JOIN cohort_sizes cs ON cr.cohort_month = cs.cohort_month
+),
+avg_by_offset AS (
+    SELECT
+        month_offset,
+        ROUND(AVG(retention_pct), 2) AS avg_retention_pct
+    FROM retention_pct
+    GROUP BY month_offset
 )
 SELECT
-    fp.first_purchase_month,
-    COUNT(fp.retailer_id) AS cohort_size,
-    COUNT(m3.retailer_id) AS retained_after_3_months,
-    ROUND(
-        COUNT(m3.retailer_id) * 100.0 / COUNT(fp.retailer_id),
-        2
-    ) AS retention_rate_percentage
-FROM first_purchase fp
-LEFT JOIN month_3_purchases m3
-    ON fp.retailer_id = m3.retailer_id
-GROUP BY fp.first_purchase_month
-ORDER BY fp.first_purchase_month;
+    rp.cohort_month,
+    rp.month_offset,
+    rp.cohort_size,
+    rp.retained_count,
+    rp.retention_pct,
+    ao.avg_retention_pct AS avg_retention_across_cohorts
+FROM retention_pct rp
+JOIN avg_by_offset ao ON rp.month_offset = ao.month_offset
+ORDER BY rp.cohort_month, rp.month_offset;
 
 
 -- Q17. Which SKUs have a declining revenue trend over the last 6 months of 2025?
