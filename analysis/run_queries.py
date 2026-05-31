@@ -2,7 +2,7 @@
 Python analytics layer — runs Q6, Q9, Q14 against Neon PostgreSQL and produces charts.
 
 Prerequisites:
-    pip install psycopg2-binary pandas matplotlib python-dotenv
+    pip install sqlalchemy psycopg2-binary pandas matplotlib python-dotenv
 
 Setup:
     Create a .env file in the project root:
@@ -17,7 +17,9 @@ import os
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
+import numpy as np
 from dotenv import load_dotenv
+from sqlalchemy import create_engine, text
 
 load_dotenv()
 
@@ -25,17 +27,15 @@ DATABASE_URL = os.environ.get("DATABASE_URL")
 if not DATABASE_URL:
     raise EnvironmentError("DATABASE_URL not set. Create a .env file in the project root.")
 
-import psycopg2
+engine = create_engine(DATABASE_URL)
 
 os.makedirs("outputs", exist_ok=True)
 os.makedirs("visuals", exist_ok=True)
 
 
 def query(sql: str) -> pd.DataFrame:
-    conn = psycopg2.connect(DATABASE_URL)
-    df = pd.read_sql_query(sql, conn)
-    conn.close()
-    return df
+    with engine.connect() as conn:
+        return pd.read_sql_query(text(sql), conn)
 
 
 # fmt: off
@@ -79,9 +79,8 @@ months_str = q6["sales_month"].astype(str).str[:7]
 ax.plot(months_str, q6["monthly_revenue"], color=LINE_COLOR, linewidth=2.5, marker="o", markersize=6)
 ax.fill_between(months_str, q6["monthly_revenue"], alpha=0.12, color=LINE_COLOR)
 
-# Annotate festive peak (Sep–Nov)
 for i, (m, rev) in enumerate(zip(months_str, q6["monthly_revenue"])):
-    if m in [str(q6["sales_month"].max())[:7]] or rev == q6["monthly_revenue"].max():
+    if rev == q6["monthly_revenue"].max():
         ax.annotate(f"₹{rev/100000:.1f}L", (m, rev), textcoords="offset points",
                     xytext=(0, 10), ha="center", fontsize=9, fontweight="bold", color="#2c3e50")
 
@@ -125,15 +124,14 @@ fig, ax = plt.subplots(figsize=(13, 6))
 fig.patch.set_facecolor("white")
 clean_ax(ax)
 
-import numpy as np
 x = np.arange(len(q9))
 w = 0.35
-bars1 = ax.bar(x - w / 2, q9["net_revenue"] / 100000, w,
-               color=LINE_COLOR, edgecolor="white", linewidth=1.2, label="Net Revenue (₹L)")
-ax2 = ax.twinax() if hasattr(ax, "twinax") else ax.twinx()
+ax.bar(x - w / 2, q9["net_revenue"] / 100000, w,
+       color=LINE_COLOR, edgecolor="white", linewidth=1.2, label="Net Revenue (₹L)")
+ax2 = ax.twinx()
 ax2.spines["top"].set_visible(False)
-bars2 = ax2.bar(x + w / 2, q9["effective_discount_pct"], w,
-                color=NEGATIVE_COLOR, edgecolor="white", linewidth=1.2, label="Effective Discount %")
+ax2.bar(x + w / 2, q9["effective_discount_pct"], w,
+        color=NEGATIVE_COLOR, edgecolor="white", linewidth=1.2, label="Effective Discount %")
 ax.set_title("Promotion Performance: Net Revenue vs Discount Rate",
              fontsize=14, fontweight="bold", color="#2c3e50", pad=14)
 ax.set_ylabel("Net Revenue (₹L)", fontsize=11, color=LINE_COLOR)
